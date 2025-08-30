@@ -1,14 +1,10 @@
+# backend/main.py
+
 from fastapi import FastAPI, HTTPException
 from models import RegisterPlayerRequest, LogMatchRequest
-# Importación condicional para evitar que falle al inicio
-try:
-    from config import w3
-    W3_AVAILABLE = True
-except Exception as e:
-    print(f"⚠️  Advertencia: No se pudo importar config.py: {e}")
-    w3 = None
-    W3_AVAILABLE = False
+from config import w3, W3_AVAILABLE
 import os
+import json
 
 app = FastAPI(
     title="GamerLedger Backend",
@@ -18,11 +14,122 @@ app = FastAPI(
 
 PLAYER_PROFILE_ADDR = os.getenv("PLAYER_PROFILE_ADDRESS")
 MATCH_HISTORY_ADDR = os.getenv("MATCH_HISTORY_ADDRESS")
+TOURNAMENT_ADDR = os.getenv("TOURNAMENT_ADDRESS")
+
+CHAIN_ID = 4202
+
+# 🔐 Autenticación básica (JWT en producción)
+# Para MVP: usamos wallet address como ID
+
+# 🎯 Endpoints del flujo
 
 
-@app.get("/")
-def home():
-    return {"message": "Bienvenido al backend de GamerLedger"}
+@app.post("/auth")
+def auth_player(req: RegisterPlayerRequest):
+    if not W3_AVAILABLE or not w3:
+        raise HTTPException(503, "Servicio Web3 no disponible")
+
+    if not w3.is_address(req.wallet_address):
+        raise HTTPException(400, "Dirección inválida")
+
+    addr = w3.to_checksum_address(req.wallet_address)
+
+    return {
+        "success": True,
+        "message": "Wallet verificada",
+        "address": addr,
+        "chain": "lisk:sepolia"
+    }
+
+
+@app.post("/verify-stats")
+def verify_stats(game: str, player_id: str):
+    # Aquí podrías llamar a una API externa (ej: Fortnite Tracker)
+    # Por ahora, solo simula una verificación exitosa
+    return {
+        "success": True,
+        "verified": True,
+        "game": game,
+        "player_id": player_id,
+        "timestamp": int(time.time())
+    }
+
+
+@app.post("/submit-proof")
+def submit_proof(req: LogMatchRequest):
+    if not W3_AVAILABLE or not w3:
+        raise HTTPException(503, "Servicio Web3 no disponible")
+
+    try:
+        tx_data = prepare_transaction(
+            contract_addr=MATCH_HISTORY_ADDR,
+            abi_path="contracts/MatchHistory.json",
+            function="log_match",
+            args=[
+                req.player1,
+                req.player2,
+                req.game,
+                req.result,
+                w3.eth.get_block("latest")["timestamp"],
+                bytes.fromhex(req.evidence_hash.replace("0x", ""))
+            ]
+        )
+        return {
+            "success": True,
+            "message": "Prueba lista para firmar",
+            "transaction": tx_data
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Error: {e}")
+
+
+@app.get("/profile/{address}")
+def get_profile(address: str):
+    if not W3_AVAILABLE or not w3:
+        raise HTTPException(503, "Servicio Web3 no disponible")
+
+    if not w3.is_address(address):
+        raise HTTPException(400, "Dirección inválida")
+
+    checksum_addr = w3.to_checksum_address(address)
+
+    # Aquí podrías combinar datos de BD + blockchain
+    nickname = get_nickname_from_contract(checksum_addr)
+    total_matches = 73
+    verified_matches = 41
+    rewards = [
+        {"type": "token", "amount": 10, "tx_hash": "0xabc..."},
+    ]
+
+    return {
+        "address": checksum_addr,
+        "nickname": nickname,
+        "total_matches": total_matches,
+        "verified_matches": verified_matches,
+        "rewards": rewards
+    }
+
+
+@app.post("/mint-token")
+def mint_token(winner_address: str):
+    if not W3_AVAILABLE or not w3:
+        raise HTTPException(503, "Servicio Web3 no disponible")
+
+    try:
+        tx_data = prepare_transaction(
+            contract_addr=TOURNAMENT_ADDR,
+            abi_path="contracts/Tournament.json",
+            function="declare_winner",
+            # tournamentId, winner
+            args=[1, w3.to_checksum_address(winner_address)]
+        )
+        return {
+            "success": True,
+            "message": "Transacción lista para mintear recompensa",
+            "transaction": tx_data
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Error: {e}")
 
 
 @app.get("/health")
@@ -53,60 +160,7 @@ def get_contract_addresses():
     return {
         "PlayerProfile": PLAYER_PROFILE_ADDR,
         "MatchHistory": MATCH_HISTORY_ADDR,
-        "Tournament": os.getenv("TOURNAMENT_ADDRESS"),
+        "Tournament": TOURNAMENT_ADDR,
         "network": "lisk:sepolia",
         "rpc": os.getenv("RPC_URL")
-    }
-
-
-@app.post("/register-player")
-def register_player(data: RegisterPlayerRequest):
-    if not W3_AVAILABLE or not w3:
-        raise HTTPException(503, "Servicio Web3 no disponible")
-
-    if not w3.is_address(data.wallet_address):
-        raise HTTPException(400, "Dirección Ethereum inválida")
-
-    addr = w3.to_checksum_address(data.wallet_address)
-
-    return {
-        "success": True,
-        "message": "Datos validados. Registra en blockchain desde Flutter.",
-        "contract_address": PLAYER_PROFILE_ADDR,
-        "function": "register_player",
-        "args": [data.nickname],
-        "network": "lisk:sepolia"
-    }
-
-
-@app.post("/log-match")
-def log_match(data: LogMatchRequest):
-    if not W3_AVAILABLE or not w3:
-        raise HTTPException(503, "Servicio Web3 no disponible")
-
-    if not w3.is_address(data.player1) or not w3.is_address(data.player2):
-        raise HTTPException(400, "Una de las direcciones es inválida")
-
-    player1 = w3.to_checksum_address(data.player1)
-    player2 = w3.to_checksum_address(data.player2)
-
-    if data.result not in [0, 1, 2]:
-        raise HTTPException(
-            400, "Resultado inválido. Usa: 0=empate, 1=gana p1, 2=gana p2")
-
-    return {
-        "success": True,
-        "contract_address": MATCH_HISTORY_ADDR,
-        "function": "log_match",
-        "args": [
-            player1,
-            player2,
-            data.game,
-            data.result,
-            w3.eth.get_block("latest")["timestamp"] if w3 else 0,
-            bytes.fromhex(data.evidence_hash.replace("0x", ""))
-        ],
-        "gas_estimate": 250000,
-        "network": "lisk:sepolia",
-        "message": "Usa estos datos en Flutter con web3dart para firmar"
     }
