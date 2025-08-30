@@ -1,0 +1,4 @@
+ Direcciones de contratos:
+   PlayerProfile: 0x907c4059d9D62eE83ef64cE8E8a7E457F1fAd9d2
+   MatchHistory: 0x87415A2EF350CF227e5d4739DC78042E9A1886F5
+   Tournament: 0xD2aAe1599d0a6F0a4e76aA675e95Daff0eDfDD36
